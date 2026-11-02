@@ -1318,6 +1318,7 @@ struct CantripHomeArtifactsView: View {
     @State private var saveError: String?
     @State private var supportsDownloads: Bool
     @State private var deleting: CantripHomeArtifact?
+    @State private var downloadedIDs: Set<UUID> = []
     @State private var viewerSources = CantripViewerSources()
 
     // Top-aligned so a two-line title doesn't push its neighbor's thumbnail down; a single
@@ -1451,18 +1452,37 @@ struct CantripHomeArtifactsView: View {
             .buttonStyle(.plain)
             .disabled(loadingID != nil)
 
-            Menu {
-                artifactActions(artifact)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 32, height: 32)
-                    .background(.regularMaterial, in: Circle())
-                    .contentShape(Circle())
+            HStack(spacing: 6) {
+                #if os(macOS)
+                Button {
+                    downloadDirectly(artifact, folder: false)
+                } label: {
+                    Image(systemName: downloadedIDs.contains(artifact.id) ? "checkmark" : "arrow.down.to.line")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(downloadedIDs.contains(artifact.id) ? Color.green : Color.primary)
+                        .frame(width: 32, height: 32)
+                        .background(.regularMaterial, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(loadingID != nil)
+                .help("Download \(artifact.fileName) to Downloads")
+                .accessibilityLabel("Download \(artifact.title)")
+                #endif
+
+                Menu {
+                    artifactActions(artifact)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                        .background(.regularMaterial, in: Circle())
+                        .contentShape(Circle())
+                }
+                .disabled(loadingID != nil)
+                .accessibilityLabel("Actions for \(artifact.title)")
             }
             .padding(16)
-            .disabled(loadingID != nil)
-            .accessibilityLabel("Actions for \(artifact.title)")
         }
         .contextMenu {
             artifactActions(artifact)
@@ -1473,6 +1493,9 @@ struct CantripHomeArtifactsView: View {
     @ViewBuilder
     private func artifactActions(_ artifact: CantripHomeArtifact) -> some View {
         #if os(macOS)
+        Button("Download to Downloads", systemImage: "arrow.down.to.line") {
+            downloadDirectly(artifact, folder: false)
+        }
         Button("Save As…", systemImage: "arrow.down.circle") {
             save(artifact, folder: false, action: .saveCopy)
         }
@@ -1487,6 +1510,9 @@ struct CantripHomeArtifactsView: View {
         if let folder = artifact.folder, supportsDownloads {
             Section("\(folder) folder") {
                 #if os(macOS)
+                Button("Download Folder as Zip", systemImage: "arrow.down.doc.fill") {
+                    downloadDirectly(artifact, folder: true)
+                }
                 Button("Save Folder as Zip…", systemImage: "doc.zipper") {
                     save(artifact, folder: true, action: .saveCopy)
                 }
@@ -1505,6 +1531,21 @@ struct CantripHomeArtifactsView: View {
             deleting = artifact
         }
     }
+
+    #if os(macOS)
+    private func downloadDirectly(_ artifact: CantripHomeArtifact, folder: Bool) {
+        guard loadingID == nil else { return }
+        let label = folder ? "the \(artifact.folder ?? "artifact") folder" : artifact.title
+        let suggested = folder ? "\(artifact.folder ?? "Artifacts").zip" : artifact.fileName
+        download(artifact, folder: folder, label: label) { file in
+            let destination = try CantripArtifactSavePanel.saveDirectlyToDownloads(
+                file, suggestedName: suggested, revealInFinder: true
+            )
+            downloadedIDs.insert(artifact.id)
+            Self.announce("Downloaded \(destination.lastPathComponent) to Downloads.")
+        }
+    }
+    #endif
 
     /// Downloads the original file (or the folder's zip) over the paired connection, then hands
     /// it to Save to Files / the share sheet (iOS) or a Save panel opened in Downloads (Mac).

@@ -389,5 +389,42 @@ enum CantripArtifactSavePanel {
         }
         CantripArtifactDownloadFolder.discard(file)
     }
+
+    /// Places the downloaded copy directly into `~/Downloads` with a non-colliding filename and
+    /// optionally reveals it in Finder.
+    @discardableResult
+    static func saveDirectlyToDownloads(_ file: URL, suggestedName: String, revealInFinder: Bool = true) throws -> URL {
+        let fm = FileManager.default
+        guard let downloadsDir = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            throw CantripRemoteError.transport("Downloads folder is unavailable.")
+        }
+        try fm.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+        let cleanName = CantripContentDisposition.sanitized(suggestedName) ?? file.lastPathComponent
+        let destination = uniqueDestination(in: downloadsDir, fileName: cleanName)
+        try fm.moveItem(at: file, to: destination)
+        CantripArtifactDownloadFolder.discard(file)
+        if revealInFinder {
+            NSWorkspace.shared.activateFileViewerSelecting([destination])
+        }
+        return destination
+    }
+
+    private static func uniqueDestination(in directory: URL, fileName: String) -> URL {
+        let fm = FileManager.default
+        let candidate = directory.appendingPathComponent(fileName)
+        if !fm.fileExists(atPath: candidate.path) {
+            return candidate
+        }
+        let ext = (fileName as NSString).pathExtension
+        let stem = (fileName as NSString).deletingPathExtension
+        for index in 2...999 {
+            let numbered = ext.isEmpty ? "\(stem) (\(index))" : "\(stem) (\(index)).\(ext)"
+            let url = directory.appendingPathComponent(numbered)
+            if !fm.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return directory.appendingPathComponent("\(UUID().uuidString)-\(fileName)")
+    }
 }
 #endif

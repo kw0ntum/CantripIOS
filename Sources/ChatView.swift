@@ -3793,6 +3793,14 @@ struct TurnView: View {
                 if !cards.isEmpty, turn.isLocalPrivate != true {
                     CantripCardStack(cards: cards, remote: remote)
                 }
+                let matchedArtifacts = turn.isLocalPrivate == true ? [] : referencedArtifacts
+                if !matchedArtifacts.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(matchedArtifacts) { artifact in
+                            CantripInlineArtifactDownloadCard(artifact: artifact, remote: remote)
+                        }
+                    }
+                }
                 if let handoffs = remoteMessage?.delegations, !handoffs.isEmpty {
                     CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
                 }
@@ -3894,6 +3902,14 @@ struct TurnView: View {
         return (remoteMessage?.subagents ?? []).filter { !$0.status.isLive }
     }
 
+    private var referencedArtifacts: [CantripHomeArtifact] {
+        guard turn.role == .assistant, !turn.text.isEmpty, !remote.homeArtifacts.isEmpty else { return [] }
+        return remote.homeArtifacts.filter { artifact in
+            turn.text.contains("Saved to Artifacts: **\(artifact.title)**")
+                || turn.text.contains(artifact.relativePath)
+        }
+    }
+
     private func approvalTitle(_ choice: String) -> String {
         switch choice {
         case "once": "Allow Once"
@@ -3903,6 +3919,127 @@ struct TurnView: View {
         default: choice.capitalized
         }
     }
+}
+
+private struct CantripInlineArtifactDownloadCard: View {
+    let artifact: CantripHomeArtifact
+    let remote: CantripRemoteModel
+    @State private var isDownloading = false
+    @State private var isDownloaded = false
+    @State private var errorText: String?
+
+    private var iconName: String {
+        switch artifact.kind {
+        case "image": return "photo"
+        case "video": return "film"
+        case "audio": return "waveform"
+        default: return "doc.richtext"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(artifact.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(artifact.fileName)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let errorText {
+                        Text("· \(errorText)")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            if isDownloading {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                #if os(macOS)
+                Button {
+                    downloadDirectly()
+                } label: {
+                    Label(
+                        isDownloaded ? "Downloaded" : "Download",
+                        systemImage: isDownloaded ? "checkmark.circle.fill" : "arrow.down.to.line"
+                    )
+                    .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Download \(artifact.fileName) to Downloads")
+
+                Button {
+                    saveAs()
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Save As…")
+                #endif
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    #if os(macOS)
+    private func downloadDirectly() {
+        guard !isDownloading else { return }
+        isDownloading = true
+        errorText = nil
+        Task {
+            defer { isDownloading = false }
+            do {
+                let file = try await remote.downloadHomeArtifact(artifact, folder: false)
+                _ = try CantripArtifactSavePanel.saveDirectlyToDownloads(
+                    file, suggestedName: artifact.fileName, revealInFinder: true
+                )
+                isDownloaded = true
+            } catch {
+                errorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func saveAs() {
+        guard !isDownloading else { return }
+        CantripArtifactSavePanel.chooseDestination(suggestedName: artifact.fileName) { destination in
+            guard let destination else { return }
+            isDownloading = true
+            errorText = nil
+            Task {
+                defer { isDownloading = false }
+                do {
+                    let file = try await remote.downloadHomeArtifact(artifact, folder: false)
+                    try CantripArtifactSavePanel.place(file, at: destination)
+                    isDownloaded = true
+                } catch {
+                    errorText = error.localizedDescription
+                }
+            }
+        }
+    }
+    #endif
 }
 
 /// Keeps all reasoning and tool activity for one response behind one summary.
